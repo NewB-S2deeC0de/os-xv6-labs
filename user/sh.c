@@ -4,6 +4,7 @@
 #include "kernel/stat.h"
 #include "user/user.h"
 #include "kernel/fcntl.h"
+#include "kernel/fs.h"
 
 // Parsed command representation
 #define EXEC  1
@@ -132,16 +133,160 @@ runcmd(struct cmd *cmd)
   exit(0);
 }
 
+#define MAX_MATCHES 32
+
+static int
+starts_with(const char *s, const char *prefix, int prefix_len)
+{
+  if (strlen(s) < prefix_len)
+    return 0;
+  return memcmp(s, prefix, prefix_len) == 0;
+}
+
+static void
+tab_complete(char *buf, int *len, int nbuf)
+{
+  int i = *len;
+  while (i > 0 && buf[i - 1] != ' ' && buf[i - 1] != '\t') {
+    i--;
+  }
+
+  char prefix[DIRSIZ + 1];
+  int prefix_len = *len - i;
+  if (prefix_len <= 0)
+    return;
+  if (prefix_len > DIRSIZ)
+    prefix_len = DIRSIZ;
+  memmove(prefix, buf + i, prefix_len);
+  prefix[prefix_len] = '\0';
+
+  // Check if this is the first word on the command line
+  int start = 0;
+  while (start < i && (buf[start] == ' ' || buf[start] == '\t')) {
+    start++;
+  }
+  int is_first_word = (start == i);
+
+  char *dir = is_first_word ? "/" : ".";
+  int fd = open(dir, O_RDONLY);
+  if (fd < 0)
+    return;
+
+  char matches[MAX_MATCHES][DIRSIZ + 1];
+  int match_count = 0;
+  struct dirent de;
+
+  while (read(fd, &de, sizeof(de)) == sizeof(de)) {
+    if (de.inum == 0)
+      continue;
+
+    char name[DIRSIZ + 1];
+    memmove(name, de.name, DIRSIZ);
+    name[DIRSIZ] = '\0';
+
+    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+      continue;
+
+    if (starts_with(name, prefix, prefix_len)) {
+      if (match_count < MAX_MATCHES) {
+        int dup = 0;
+        for (int k = 0; k < match_count; k++) {
+          if (strcmp(matches[k], name) == 0) {
+            dup = 1;
+            break;
+          }
+        }
+        if (!dup) {
+          strcpy(matches[match_count++], name);
+        }
+      }
+    }
+  }
+  close(fd);
+
+  if (match_count == 0)
+    return;
+
+  // Sort matches alphabetically
+  for (int m = 0; m < match_count - 1; m++) {
+    for (int k = m + 1; k < match_count; k++) {
+      if (strcmp(matches[m], matches[k]) > 0) {
+        char tmp[DIRSIZ + 1];
+        strcpy(tmp, matches[m]);
+        strcpy(matches[m], matches[k]);
+        strcpy(matches[k], tmp);
+      }
+    }
+  }
+
+  if (match_count == 1) {
+    char completion[DIRSIZ + 2];
+    strcpy(completion, matches[0] + prefix_len);
+    if (is_first_word) {
+      int clen = strlen(completion);
+      completion[clen] = ' ';
+      completion[clen + 1] = '\0';
+    }
+    int compl_len = strlen(completion);
+    if (*len + compl_len < nbuf) {
+      write(2, completion, compl_len);
+      strcpy(buf + *len, completion);
+      *len += compl_len;
+    }
+  } else {
+    // Multiple matches
+    write(2, "\n", 1);
+    for (int m = 0; m < match_count; m++) {
+      if (m > 0)
+        write(2, " ", 1);
+      write(2, matches[m], strlen(matches[m]));
+    }
+    write(2, "\n$ ", 3);
+    write(2, buf, *len);
+  }
+}
+
 int
 getcmd(char *buf, int nbuf)
 {
   struct stat st;
+  int is_console = (fstat(0, &st) == 0 && st.type == T_DEVICE);
 
-  if (fstat(0, &st) == 0 && st.type == T_DEVICE)
+  if (is_console)
     write(2, "$ ", 2);
+
   memset(buf, 0, nbuf);
-  gets(buf, nbuf);
-  if (buf[0] == 0) // EOF
+
+  if (!is_console) {
+    gets(buf, nbuf);
+    if (buf[0] == 0) // EOF
+      return -1;
+    return 0;
+  }
+
+  int len = 0;
+  while (len + 1 < nbuf) {
+    char c;
+    int cc = read(0, &c, 1);
+    if (cc < 1) {
+      if (len == 0)
+        return -1; // EOF
+      break;
+    }
+
+    if (c == '\t') {
+      tab_complete(buf, &len, nbuf);
+      continue;
+    }
+
+    buf[len++] = c;
+    buf[len] = '\0';
+
+    if (c == '\n' || c == '\r')
+      break;
+  }
+
+  if (len == 0)
     return -1;
   return 0;
 }
