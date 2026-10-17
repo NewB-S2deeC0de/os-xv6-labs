@@ -95,7 +95,7 @@ memdump(char *fmt, char *data, int len)
     }
 
     if (size > len - off) {
-      printf("memdump: not enough data\n");
+      printf("memdump: not enough data for '%c'\n", *fmt);
       return;
     }
 
