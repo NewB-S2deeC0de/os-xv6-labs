@@ -60,6 +60,74 @@ main(int argc, char *argv[])
 void
 memdump(char *fmt, char *data, int len)
 {
-  // Your code here.  `data` holds `len` valid bytes.
+  int off = 0;
 
+  for (; *fmt; fmt++) {
+    int size;
+
+    switch (*fmt) {
+    case 'i':
+      size = sizeof(int);
+      break;
+    case 'p':
+    case 's':
+      size = sizeof(char *);
+      break;
+    case 'h':
+      size = sizeof(short);
+      break;
+    case 'c':
+      size = sizeof(char);
+      break;
+    case 'S': {
+      int end;
+
+      for (end = off; end < len && data[end] != '\0'; end++)
+        ;
+      for (int i = off; i < end; i++)
+        printf("%c", data[i]);
+      printf("\n");
+      off = end < len ? end + 1 : len;
+      continue;
+    }
+    default:
+      continue;
+    }
+
+    if (size > len - off) {
+      printf("memdump: not enough data\n");
+      return;
+    }
+
+    switch (*fmt) {
+    case 'i': {
+      int value;
+      memcpy(&value, data + off, sizeof(value));
+      printf("%d\n", value);
+      break;
+    }
+    case 'p': {
+      uint64 value = 0;
+      memcpy(&value, data + off, sizeof(char *));
+      printf("%lx\n", value);
+      break;
+    }
+    case 'h': {
+      short value;
+      memcpy(&value, data + off, sizeof(value));
+      printf("%d\n", value);
+      break;
+    }
+    case 'c':
+      printf("%c\n", data[off]);
+      break;
+    case 's': {
+      char *value;
+      memcpy(&value, data + off, sizeof(value));
+      printf("%s\n", value);
+      break;
+    }
+    }
+    off += size;
+  }
 }
