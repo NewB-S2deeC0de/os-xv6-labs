@@ -246,6 +246,14 @@ tab_complete(char *buf, int *len, int nbuf)
   }
 }
 
+#define KEY_UP    0xE2
+#define KEY_DOWN  0xE3
+#define MAX_HIST  32
+#define HIST_CMD_SIZE 100
+
+static char history[MAX_HIST][HIST_CMD_SIZE];
+static int hist_count = 0; // Total count of commands recorded (1-indexed)
+
 int
 getcmd(char *buf, int nbuf)
 {
@@ -265,6 +273,10 @@ getcmd(char *buf, int nbuf)
   }
 
   int len = 0;
+  int hist_nav = hist_count; // Navigation starts at the end (current line)
+  char temp_buf[HIST_CMD_SIZE];
+  temp_buf[0] = '\0';
+
   while (len + 1 < nbuf) {
     char c;
     int cc = read(0, &c, 1);
@@ -274,16 +286,84 @@ getcmd(char *buf, int nbuf)
       break;
     }
 
+    if ((uchar)c == (uchar)KEY_UP) {
+      int min_nav = (hist_count > MAX_HIST) ? (hist_count - MAX_HIST) : 0;
+      if (hist_nav > min_nav) {
+        if (hist_nav == hist_count) {
+          memmove(temp_buf, buf, len);
+          temp_buf[len] = '\0';
+        }
+        hist_nav--;
+
+        // Erase current line on screen
+        for (int k = 0; k < len; k++) {
+          write(2, "\b \b", 3);
+        }
+
+        // Copy history entry into buf
+        char *hcmd = history[hist_nav % MAX_HIST];
+        len = strlen(hcmd);
+        if (len >= nbuf)
+          len = nbuf - 1;
+        memmove(buf, hcmd, len);
+        buf[len] = '\0';
+
+        write(2, buf, len);
+      }
+      continue;
+    }
+
+    if ((uchar)c == (uchar)KEY_DOWN) {
+      if (hist_nav < hist_count) {
+        hist_nav++;
+
+        // Erase current line on screen
+        for (int k = 0; k < len; k++) {
+          write(2, "\b \b", 3);
+        }
+
+        if (hist_nav < hist_count) {
+          char *hcmd = history[hist_nav % MAX_HIST];
+          len = strlen(hcmd);
+          if (len >= nbuf)
+            len = nbuf - 1;
+          memmove(buf, hcmd, len);
+          buf[len] = '\0';
+        } else {
+          len = strlen(temp_buf);
+          if (len >= nbuf)
+            len = nbuf - 1;
+          memmove(buf, temp_buf, len);
+          buf[len] = '\0';
+        }
+
+        write(2, buf, len);
+      }
+      continue;
+    }
+
+    if (c == '\b') {
+      if (len > 0) {
+        len--;
+        buf[len] = '\0';
+        write(2, "\b \b", 3);
+      }
+      continue;
+    }
+
     if (c == '\t') {
       tab_complete(buf, &len, nbuf);
       continue;
     }
 
-    buf[len++] = c;
-    buf[len] = '\0';
-
-    if (c == '\n' || c == '\r')
+    if (c >= 32 && c <= 126) {
+      buf[len++] = c;
+      buf[len] = '\0';
+    } else if (c == '\n' || c == '\r') {
+      buf[len++] = '\n';
+      buf[len] = '\0';
       break;
+    }
   }
 
   if (len == 0)
@@ -310,18 +390,85 @@ main(void)
     char *cmd = buf;
     while (*cmd == ' ' || *cmd == '\t')
       cmd++;
-    if (*cmd == '\n') // is a blank command
+    if (*cmd == '\n' || *cmd == '\0') // is a blank command
       continue;
-    if (cmd[0] == 'c' && cmd[1] == 'd' && cmd[2] == ' ') {
-      // Chdir must be called by the parent, not the child.
-      cmd[strlen(cmd) - 1] = 0; // chop \n
-      if (chdir(cmd + 3) < 0)
-        fprintf(2, "cannot cd %s\n", cmd + 3);
-    } else {
-      if (fork1() == 0)
-        runcmd(parsecmd(cmd));
-      wait(0);
+
+    // Chop trailing newline and whitespace
+    int cmdlen = strlen(cmd);
+    while (cmdlen > 0 && (cmd[cmdlen - 1] == '\n' || cmd[cmdlen - 1] == '\r' ||
+                          cmd[cmdlen - 1] == ' ' || cmd[cmdlen - 1] == '\t')) {
+      cmd[--cmdlen] = '\0';
     }
+
+    // Sanitize cmd: filter only printable ASCII characters (32 to 126)
+    int w = 0;
+    for (int r = 0; r < cmdlen; r++) {
+      if (cmd[r] >= 32 && cmd[r] <= 126) {
+        cmd[w++] = cmd[r];
+      }
+    }
+    cmd[w] = '\0';
+    cmdlen = w;
+    if (cmdlen == 0)
+      continue;
+
+    // Check for !! and !n expansion
+    static char expanded_cmd[HIST_CMD_SIZE];
+    if (cmd[0] == '!') {
+      int found = 0;
+      if (cmd[1] == '!' && cmd[2] == '\0') {
+        if (hist_count == 0) {
+          fprintf(2, "!!: event not found\n");
+          continue;
+        }
+        strcpy(expanded_cmd, history[(hist_count - 1) % MAX_HIST]);
+        found = 1;
+      } else if (cmd[1] >= '0' && cmd[1] <= '9') {
+        int num = atoi(cmd + 1);
+        int min_id = (hist_count > MAX_HIST) ? (hist_count - MAX_HIST + 1) : 1;
+        if (num >= min_id && num <= hist_count) {
+          strcpy(expanded_cmd, history[(num - 1) % MAX_HIST]);
+          found = 1;
+        } else {
+          fprintf(2, "!%d: event not found\n", num);
+          continue;
+        }
+      }
+
+      if (found) {
+        printf("%s\n", expanded_cmd); // Shell in lệnh ra trước khi chạy
+        cmd = expanded_cmd;
+      }
+    }
+
+    // Add command to history
+    strcpy(history[hist_count % MAX_HIST], cmd);
+    hist_count++;
+
+    // Built-in history command
+    if (strcmp(cmd, "history") == 0) {
+      int start_id = (hist_count > MAX_HIST) ? (hist_count - MAX_HIST + 1) : 1;
+      for (int k = start_id; k <= hist_count; k++) {
+        printf("%d %s\n", k, history[(k - 1) % MAX_HIST]);
+      }
+      continue;
+    }
+
+    // Built-in cd command
+    if (cmd[0] == 'c' && cmd[1] == 'd' && (cmd[2] == ' ' || cmd[2] == '\0')) {
+      char *path = cmd + 2;
+      while (*path == ' ')
+        path++;
+      if (*path == '\0')
+        path = "/";
+      if (chdir(path) < 0)
+        fprintf(2, "cannot cd %s\n", path);
+      continue;
+    }
+
+    if (fork1() == 0)
+      runcmd(parsecmd(cmd));
+    wait(0);
   }
   exit(0);
 }

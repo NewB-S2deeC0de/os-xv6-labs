@@ -24,6 +24,8 @@
 
 #define BACKSPACE 0x100       // erase the last output character
 #define C(x)      ((x) - '@') // Control-x
+#define KEY_UP    0xE2
+#define KEY_DOWN  0xE3
 
 //
 // send one character to the uart, but don't use
@@ -126,8 +128,9 @@ consoleread(int user_dst, uint64 dst, int n)
     dst++;
     --n;
 
-    if (c == '\n' || c == '\t') {
-      // a whole line (or tab) has arrived, return to
+    if (c == '\n' || c == '\t' || c == '\b' ||
+        (uchar)c == (uchar)KEY_UP || (uchar)c == (uchar)KEY_DOWN) {
+      // a whole line (or special key) has arrived, return to
       // the user-level read().
       break;
     }
@@ -148,6 +151,52 @@ consoleintr(int c)
 {
   acquire(&cons.lock);
 
+  static int esc_state = 0;
+
+  if (esc_state == 1) {
+    if (c == '[') {
+      esc_state = 2;
+      release(&cons.lock);
+      return;
+    } else {
+      esc_state = 0;
+      release(&cons.lock);
+      return;
+    }
+  } else if (esc_state == 2) {
+    if ((c >= '0' && c <= '9') || c == ';') {
+      // parameter byte in escape sequence, keep waiting
+      release(&cons.lock);
+      return;
+    }
+    esc_state = 0;
+    if (c == 'A') { // Up Arrow
+      if (cons.e - cons.r < INPUT_BUF_SIZE) {
+        cons.buf[cons.e++ % INPUT_BUF_SIZE] = (char)KEY_UP;
+        cons.w = cons.e;
+        wakeup(&cons.r);
+      }
+      release(&cons.lock);
+      return;
+    } else if (c == 'B') { // Down Arrow
+      if (cons.e - cons.r < INPUT_BUF_SIZE) {
+        cons.buf[cons.e++ % INPUT_BUF_SIZE] = (char)KEY_DOWN;
+        cons.w = cons.e;
+        wakeup(&cons.r);
+      }
+      release(&cons.lock);
+      return;
+    }
+    release(&cons.lock);
+    return;
+  }
+
+  if (c == 0x1b) {
+    esc_state = 1;
+    release(&cons.lock);
+    return;
+  }
+
   switch (c) {
   case C('P'): // Print process list.
     procdump();
@@ -164,6 +213,12 @@ consoleintr(int c)
     if (cons.e != cons.w) {
       cons.e--;
       consputc(BACKSPACE);
+    } else {
+      if (cons.e - cons.r < INPUT_BUF_SIZE) {
+        cons.buf[cons.e++ % INPUT_BUF_SIZE] = '\b';
+        cons.w = cons.e;
+        wakeup(&cons.r);
+      }
     }
     break;
   case '\t': // Tab key
@@ -175,19 +230,21 @@ consoleintr(int c)
     break;
   default:
     if (c != 0 && cons.e - cons.r < INPUT_BUF_SIZE) {
-      c = (c == '\r') ? '\n' : c;
+      if (c == '\r' || c == '\n' || c == C('D') || (c >= 32 && c <= 126)) {
+        c = (c == '\r') ? '\n' : c;
 
-      // echo back to the user.
-      consputc(c);
+        // echo back to the user.
+        consputc(c);
 
-      // store for consumption by consoleread().
-      cons.buf[cons.e++ % INPUT_BUF_SIZE] = c;
+        // store for consumption by consoleread().
+        cons.buf[cons.e++ % INPUT_BUF_SIZE] = c;
 
-      if (c == '\n' || c == C('D') || cons.e - cons.r == INPUT_BUF_SIZE) {
-        // wake up consoleread() if a whole line (or end-of-file)
-        // has arrived.
-        cons.w = cons.e;
-        wakeup(&cons.r);
+        if (c == '\n' || c == C('D') || cons.e - cons.r == INPUT_BUF_SIZE) {
+          // wake up consoleread() if a whole line (or end-of-file)
+          // has arrived.
+          cons.w = cons.e;
+          wakeup(&cons.r);
+        }
       }
     }
     break;
