@@ -144,7 +144,19 @@ syscall(void)
   num = p->trapframe->a7;
   if (num > 0 && num < NELEM(syscalls) && syscalls[num]) {
     if (p->syscall_mask & (1 << num)) {
-      p->trapframe->a0 = -1;
+      char path[MAXPATH];
+      int path_allowed = 0;
+
+      if ((num == SYS_open || num == SYS_exec) &&
+          (p->syscall_path_mask & (1 << num)) &&
+          argstr(0, path, sizeof(path)) >= 0 &&
+          strncmp(path, p->syscall_path, MAXPATH) == 0)
+        path_allowed = 1;
+
+      if (path_allowed)
+        p->trapframe->a0 = syscalls[num]();
+      else
+        p->trapframe->a0 = -1;
     } else {
       // Use num to lookup the system call function for num, call it,
       // and store its return value in p->trapframe->a0

@@ -1,6 +1,7 @@
 #include "types.h"
 #include "riscv.h"
 #include "defs.h"
+#include "syscall.h"
 #include "param.h"
 #include "memlayout.h"
 #include "spinlock.h"
@@ -104,9 +105,22 @@ uint64
 sys_interpose(void)
 {
   int mask;
+  char path[MAXPATH];
+  int path_calls = (1 << SYS_open) | (1 << SYS_exec);
 
   argint(0, &mask);
-  myproc()->syscall_mask |= mask;
+  if (argstr(1, path, sizeof(path)) < 0)
+    return -1;
+
+  struct proc *p = myproc();
+  p->syscall_mask |= mask;
+  if (strncmp(path, "-", 2) == 0) {
+    // A dash means that no pathname exception is requested for these calls.
+    p->syscall_path_mask &= ~(mask & path_calls);
+  } else if (mask & path_calls) {
+    safestrcpy(p->syscall_path, path, sizeof(p->syscall_path));
+    p->syscall_path_mask |= mask & path_calls;
+  }
   return 0;
 }
 

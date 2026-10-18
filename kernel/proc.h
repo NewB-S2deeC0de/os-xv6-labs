@@ -1,4 +1,6 @@
 // Saved registers for kernel context switches.
+#include "param.h"
+
 struct context {
   uint64 ra;
   uint64 sp;
@@ -89,6 +91,8 @@ struct proc {
   int xstate;           // Exit status to be returned to parent's wait
   int pid;              // Process ID
   int syscall_mask;     // System calls this process is not allowed to use
+  int syscall_path_mask; // Masked open/exec calls allowed for syscall_path
+  char syscall_path[MAXPATH]; // Path allowed for selected masked calls
 
   // wait_lock must be held when using this:
   struct proc *parent; // Parent process
