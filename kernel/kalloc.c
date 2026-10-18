@@ -30,7 +30,6 @@ kinit()
   freerange(end, (void *)PHYSTOP);
 }
 
-
 void
 freerange(void *pa_start, void *pa_end)
 {
@@ -53,7 +52,6 @@ kfree(void *pa)
   if (((uint64)pa % PGSIZE) != 0 || (char *)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
-
 #ifndef LAB_SYSCALL
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
@@ -66,7 +64,6 @@ kfree(void *pa)
   kmem.freelist = r;
   release(&kmem.lock);
 }
-
 
 // Allocate one 4096-byte page of physical memory.
 // Returns a pointer that the kernel can use.
@@ -88,4 +85,3 @@ kalloc(void)
 #endif
   return (void *)r;
 }
-

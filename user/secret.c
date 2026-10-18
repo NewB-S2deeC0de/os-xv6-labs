@@ -16,12 +16,12 @@ main(int argc, char *argv[])
   char *data = sbrk(DATASIZE);
 
   // avoid putting the secret near the very start of a page.
-  unsigned long align = ((unsigned long) data) % 4096;
-  if(align != 0)
+  unsigned long align = ((unsigned long)data) % 4096;
+  if (align != 0)
     data += (4096 - align);
 
   // but put it at a random-ish offset.
-  if(strlen(argv[1]) > 0)
+  if (strlen(argv[1]) > 0)
     data += 32 + (unsigned int)(argv[1][0] & 0xff);
 
 #define MSG "Here it is: "
