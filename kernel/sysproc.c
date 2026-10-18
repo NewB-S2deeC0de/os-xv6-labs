@@ -99,8 +99,7 @@ sys_kill(void)
   return kkill(pid);
 }
 
-// Restrict this process to the system calls not selected by mask.
-// Part A ignores path; callers pass "-" until pathname filtering is added.
+// Add syscall restrictions and an optional pathname exception for open/exec.
 uint64
 sys_interpose(void)
 {
