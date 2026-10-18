@@ -98,6 +98,18 @@ sys_kill(void)
   return kkill(pid);
 }
 
+// Restrict this process to the system calls not selected by mask.
+// Part A ignores path; callers pass "-" until pathname filtering is added.
+uint64
+sys_interpose(void)
+{
+  int mask;
+
+  argint(0, &mask);
+  myproc()->syscall_mask |= mask;
+  return 0;
+}
+
 // return how many clock tick interrupts have occurred
 // since start.
 uint64
