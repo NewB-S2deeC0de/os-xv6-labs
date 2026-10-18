@@ -29,5 +29,3 @@
 #else
 #define USERSTACK 1 // user stack pages
 #endif
-
-
