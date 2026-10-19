@@ -264,6 +264,8 @@ getcmd(char *buf, int nbuf)
     return 0;
   }
 
+#define C(x) ((x) - '@')
+
   int len = 0;
   while (len + 1 < nbuf) {
     char c;
@@ -274,16 +276,37 @@ getcmd(char *buf, int nbuf)
       break;
     }
 
+    if (c == '\b') {
+      if (len > 0) {
+        len--;
+        buf[len] = '\0';
+        write(2, "\b \b", 3);
+      }
+      continue;
+    }
+
+    if (c == C('U') || c == '\x15') {
+      while (len > 0) {
+        len--;
+        write(2, "\b \b", 3);
+      }
+      buf[0] = '\0';
+      continue;
+    }
+
     if (c == '\t') {
       tab_complete(buf, &len, nbuf);
       continue;
     }
 
-    buf[len++] = c;
-    buf[len] = '\0';
-
-    if (c == '\n' || c == '\r')
+    if (c >= 32 && c <= 126) {
+      buf[len++] = c;
+      buf[len] = '\0';
+    } else if (c == '\n' || c == '\r') {
+      buf[len++] = '\n';
+      buf[len] = '\0';
       break;
+    }
   }
 
   if (len == 0)

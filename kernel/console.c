@@ -24,6 +24,8 @@
 
 #define BACKSPACE 0x100       // erase the last output character
 #define C(x)      ((x) - '@') // Control-x
+#define KEY_UP    0xE2        // Up-arrow sentinel byte forwarded to user-space
+#define KEY_DOWN  0xE3        // Down-arrow sentinel byte forwarded to user-space
 
 //
 // send one character to the uart, but don't use
@@ -126,8 +128,9 @@ consoleread(int user_dst, uint64 dst, int n)
     dst++;
     --n;
 
-    if (c == '\n' || c == '\t') {
-      // a whole line (or tab) has arrived, return to
+    if (c == '\n' || c == '\t' || c == '\b' || c == '\x15' ||
+        (uchar)c == (uchar)KEY_UP || (uchar)c == (uchar)KEY_DOWN) {
+      // a whole line (or special key) has arrived, return to
       // the user-level read().
       break;
     }
@@ -148,46 +151,114 @@ consoleintr(int c)
 {
   acquire(&cons.lock);
 
+  // --- ANSI escape sequence state machine ---
+  // Intercept arrow-key sequences (\x1b [ A/B) without echoing them.
+  // Forwards KEY_UP / KEY_DOWN sentinel bytes to user-space instead.
+  static int esc_state = 0;
+
+  if (esc_state == 1) {
+    esc_state = (c == '[') ? 2 : 0;
+    if (esc_state == 0) {
+      // Not a CSI sequence; discard the stray ESC + this byte.
+      release(&cons.lock);
+      return;
+    }
+    release(&cons.lock);
+    return;
+  } else if (esc_state == 2) {
+    // Parameter bytes (digits, semicolons) inside an escape sequence.
+    if ((c >= '0' && c <= '9') || c == ';') {
+      release(&cons.lock);
+      return;
+    }
+    esc_state = 0;
+    // Only handle Up (A) and Down (B); discard all other final bytes.
+    if (c == 'A' || c == 'B') {
+      char key = (c == 'A') ? (char)KEY_UP : (char)KEY_DOWN;
+      if (cons.e - cons.r < INPUT_BUF_SIZE) {
+        cons.buf[cons.e++ % INPUT_BUF_SIZE] = key;
+        cons.w = cons.e;
+        wakeup(&cons.r);
+      }
+    }
+    release(&cons.lock);
+    return;
+  }
+
+  if (c == 0x1b) { // ESC — start of an escape sequence
+    esc_state = 1;
+    release(&cons.lock);
+    return;
+  }
+  // ------------------------------------------
+
   switch (c) {
   case C('P'): // Print process list.
     procdump();
     break;
+
   case C('U'): // Kill line.
+    // Phase 1: erase what the user typed into the kernel's editable region.
     while (cons.e != cons.w &&
            cons.buf[(cons.e - 1) % INPUT_BUF_SIZE] != '\n') {
       cons.e--;
       consputc(BACKSPACE);
     }
-    break;
-  case C('H'): // Backspace
-  case '\x7f': // Delete key
-    if (cons.e != cons.w) {
-      cons.e--;
-      consputc(BACKSPACE);
+    // Phase 2: forward '\x15' to shell so it can erase completion text
+    // that lives only in shell's own buffer, not in cons.buf.
+    if (cons.e - cons.r < INPUT_BUF_SIZE) {
+      cons.buf[cons.e++ % INPUT_BUF_SIZE] = '\x15';
+      cons.w = cons.e;
+      wakeup(&cons.r);
     }
     break;
-  case '\t': // Tab key
+
+  case C('H'): // Backspace (Ctrl-H)
+  case '\x7f': // Delete key
+    if (cons.e != cons.w) {
+      // Normal case: user typed some chars; kernel erases the last one.
+      cons.e--;
+      consputc(BACKSPACE);
+    } else {
+      // Special case: the editable region is empty (cons.e == cons.w).
+      // This happens immediately after Tab completion: shell wrote the
+      // completion text to the screen via write(), but those bytes never
+      // entered cons.buf.  Forward '\b' to shell so shell can erase its
+      // own buffer and redraw the terminal line.
+      if (cons.e - cons.r < INPUT_BUF_SIZE) {
+        cons.buf[cons.e++ % INPUT_BUF_SIZE] = '\b';
+        cons.w = cons.e;
+        wakeup(&cons.r);
+      }
+    }
+    break;
+
+  case '\t': // Tab key — commit immediately so shell can call tab_complete().
     if (cons.e - cons.r < INPUT_BUF_SIZE) {
       cons.buf[cons.e++ % INPUT_BUF_SIZE] = '\t';
       cons.w = cons.e;
       wakeup(&cons.r);
     }
     break;
+
   default:
     if (c != 0 && cons.e - cons.r < INPUT_BUF_SIZE) {
-      c = (c == '\r') ? '\n' : c;
+      // Accept only printable ASCII (32–126), carriage return, newline,
+      // and Ctrl-D.  This blocks stray control bytes from IME / dead keys.
+      if (c == '\r' || c == '\n' || c == C('D') || (c >= 32 && c <= 126)) {
+        c = (c == '\r') ? '\n' : c;
 
-      // echo back to the user.
-      consputc(c);
+        // echo back to the user.
+        consputc(c);
 
-      // store for consumption by consoleread().
-      cons.buf[cons.e++ % INPUT_BUF_SIZE] = c;
+        // store for consumption by consoleread().
+        cons.buf[cons.e++ % INPUT_BUF_SIZE] = c;
 
-      if (c == '\n' || c == C('D') || cons.e - cons.r == INPUT_BUF_SIZE) {
-        // wake up consoleread() if a whole line (or end-of-file)
-        // has arrived.
-        cons.w = cons.e;
-        wakeup(&cons.r);
+        if (c == '\n' || c == C('D') || cons.e - cons.r == INPUT_BUF_SIZE) {
+          // wake up consoleread() if a whole line (or end-of-file) arrived.
+          cons.w = cons.e;
+          wakeup(&cons.r);
+        }
       }
     }
     break;
