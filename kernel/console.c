@@ -55,6 +55,7 @@ struct {
   uint r; // Read index
   uint w; // Write index
   uint e; // Edit index
+  int tab_active; // 1 if a Tab completion occurred on the current line
 } cons;
 
 //
@@ -204,12 +205,16 @@ consoleintr(int c)
       cons.e--;
       consputc(BACKSPACE);
     }
-    // Phase 2: forward '\x15' to shell so it can erase completion text
-    // that lives only in shell's own buffer, not in cons.buf.
-    if (cons.e - cons.r < INPUT_BUF_SIZE) {
-      cons.buf[cons.e++ % INPUT_BUF_SIZE] = '\x15';
-      cons.w = cons.e;
-      wakeup(&cons.r);
+    // Phase 2: forward '\x15' to shell ONLY if Tab completion was active on
+    // this line (so shell can erase completion text in its own buffer).
+    // For all other programs (e.g. cat, keytest), never emit raw byte 21.
+    if (cons.tab_active) {
+      cons.tab_active = 0;
+      if (cons.e - cons.r < INPUT_BUF_SIZE) {
+        cons.buf[cons.e++ % INPUT_BUF_SIZE] = '\x15';
+        cons.w = cons.e;
+        wakeup(&cons.r);
+      }
     }
     break;
 
@@ -219,12 +224,10 @@ consoleintr(int c)
       // Normal case: user typed some chars; kernel erases the last one.
       cons.e--;
       consputc(BACKSPACE);
-    } else {
-      // Special case: the editable region is empty (cons.e == cons.w).
-      // This happens immediately after Tab completion: shell wrote the
-      // completion text to the screen via write(), but those bytes never
-      // entered cons.buf.  Forward '\b' to shell so shell can erase its
-      // own buffer and redraw the terminal line.
+    } else if (cons.tab_active) {
+      // Special case: editable region is empty (cons.e == cons.w) AND Tab
+      // completion was active. Forward '\b' to shell to erase completion text.
+      // For all other programs, do not emit stray '\b' on an empty line.
       if (cons.e - cons.r < INPUT_BUF_SIZE) {
         cons.buf[cons.e++ % INPUT_BUF_SIZE] = '\b';
         cons.w = cons.e;
@@ -237,6 +240,7 @@ consoleintr(int c)
     if (cons.e - cons.r < INPUT_BUF_SIZE) {
       cons.buf[cons.e++ % INPUT_BUF_SIZE] = '\t';
       cons.w = cons.e;
+      cons.tab_active = 1; // Mark Tab completion active on this line
       wakeup(&cons.r);
     }
     break;
@@ -246,6 +250,9 @@ consoleintr(int c)
       // Accept only printable ASCII (32–126), carriage return, newline,
       // and Ctrl-D.  This blocks stray control bytes from IME / dead keys.
       if (c == '\r' || c == '\n' || c == C('D') || (c >= 32 && c <= 126)) {
+        if (c == '\r' || c == '\n' || c == C('D')) {
+          cons.tab_active = 0; // Newline or EOF ends the line, clear Tab flag
+        }
         c = (c == '\r') ? '\n' : c;
 
         // echo back to the user.
@@ -271,6 +278,7 @@ void
 consoleinit(void)
 {
   initlock(&cons.lock, "cons");
+  cons.tab_active = 0;
 
   uartinit();
 
