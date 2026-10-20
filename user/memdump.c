@@ -62,14 +62,20 @@ memdump(char *fmt, char *data, int len)
 {
   int off = 0;
 
+  if (len < 0)
+    len = 0;
+
   for (; *fmt; fmt++) {
-    int size;
+    // uint is xv6's available unsigned size type for sizeof() results.
+    uint size;
 
     switch (*fmt) {
     case 'i':
       size = sizeof(int);
       break;
     case 'p':
+      size = sizeof(uint64);
+      break;
     case 's':
       size = sizeof(char *);
       break;
@@ -94,7 +100,8 @@ memdump(char *fmt, char *data, int len)
       continue;
     }
 
-    if (size > len - off) {
+    // off is bounded by len above, so the remaining byte count is nonnegative.
+    if (size > (uint)(len - off)) {
       printf("memdump: not enough data for '%c'\n", *fmt);
       return;
     }
@@ -102,19 +109,19 @@ memdump(char *fmt, char *data, int len)
     switch (*fmt) {
     case 'i': {
       int value;
-      memcpy(&value, data + off, sizeof(value));
+      memcpy(&value, data + off, size);
       printf("%d\n", value);
       break;
     }
     case 'p': {
       uint64 value = 0;
-      memcpy(&value, data + off, sizeof(char *));
+      memcpy(&value, data + off, size);
       printf("%lx\n", value);
       break;
     }
     case 'h': {
       short value;
-      memcpy(&value, data + off, sizeof(value));
+      memcpy(&value, data + off, size);
       printf("%d\n", value);
       break;
     }
@@ -123,7 +130,7 @@ memdump(char *fmt, char *data, int len)
       break;
     case 's': {
       char *value;
-      memcpy(&value, data + off, sizeof(value));
+      memcpy(&value, data + off, size);
       printf("%s\n", value);
       break;
     }
