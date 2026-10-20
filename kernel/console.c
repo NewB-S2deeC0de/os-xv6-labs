@@ -55,8 +55,33 @@ struct {
   uint r; // Read index
   uint w; // Write index
   uint e; // Edit index
-  int tab_active; // 1 if a Tab completion occurred on the current line
+  int raw_pid; // PID of process that enabled raw/interactive console mode
 } cons;
+
+int
+consoleraw(int enable)
+{
+  acquire(&cons.lock);
+  if (enable) {
+    cons.raw_pid = myproc()->pid;
+  } else {
+    if (cons.raw_pid == myproc()->pid) {
+      cons.raw_pid = 0;
+    }
+  }
+  release(&cons.lock);
+  return 0;
+}
+
+void
+consoleraw_cleanup(int pid)
+{
+  acquire(&cons.lock);
+  if (cons.raw_pid == pid) {
+    cons.raw_pid = 0;
+  }
+  release(&cons.lock);
+}
 
 //
 // user write() system calls to the console go here.
@@ -129,11 +154,16 @@ consoleread(int user_dst, uint64 dst, int n)
     dst++;
     --n;
 
-    if (c == '\n' || c == '\t' || c == '\b' || c == '\x15' ||
-        (uchar)c == (uchar)KEY_UP || (uchar)c == (uchar)KEY_DOWN) {
-      // a whole line (or special key) has arrived, return to
-      // the user-level read().
+    if (c == '\n') {
       break;
+    }
+
+    // In raw mode for shell: return immediately on special control keys
+    if (cons.raw_pid != 0) {
+      if (c == '\t' || c == '\b' || c == '\x15' ||
+          (uchar)c == (uchar)KEY_UP || (uchar)c == (uchar)KEY_DOWN) {
+        break;
+      }
     }
   }
   release(&cons.lock);
@@ -173,8 +203,8 @@ consoleintr(int c)
       return;
     }
     esc_state = 0;
-    // Only handle Up (A) and Down (B); discard all other final bytes.
-    if (c == 'A' || c == 'B') {
+    // Only handle Up (A) and Down (B) when interactive raw mode is active.
+    if ((c == 'A' || c == 'B') && cons.raw_pid != 0) {
       char key = (c == 'A') ? (char)KEY_UP : (char)KEY_DOWN;
       if (cons.e - cons.r < INPUT_BUF_SIZE) {
         cons.buf[cons.e++ % INPUT_BUF_SIZE] = key;
@@ -205,11 +235,10 @@ consoleintr(int c)
       cons.e--;
       consputc(BACKSPACE);
     }
-    // Phase 2: forward '\x15' to shell ONLY if Tab completion was active on
-    // this line (so shell can erase completion text in its own buffer).
-    // For all other programs (e.g. cat, keytest), never emit raw byte 21.
-    if (cons.tab_active) {
-      cons.tab_active = 0;
+    // Phase 2: forward '\x15' ONLY when raw interactive mode is active for shell
+    // (so shell can erase completion text in its own buffer).
+    // In cooked mode (cat, keytest, ctrlutest), never emit raw byte 21.
+    if (cons.raw_pid != 0) {
       if (cons.e - cons.r < INPUT_BUF_SIZE) {
         cons.buf[cons.e++ % INPUT_BUF_SIZE] = '\x15';
         cons.w = cons.e;
@@ -224,9 +253,9 @@ consoleintr(int c)
       // Normal case: user typed some chars; kernel erases the last one.
       cons.e--;
       consputc(BACKSPACE);
-    } else if (cons.tab_active) {
-      // Special case: editable region is empty (cons.e == cons.w) AND Tab
-      // completion was active. Forward '\b' to shell to erase completion text.
+    } else if (cons.raw_pid != 0) {
+      // Special case: editable region is empty (cons.e == cons.w) AND raw
+      // mode is active for shell. Forward '\b' to shell to erase completion text.
       // For all other programs, do not emit stray '\b' on an empty line.
       if (cons.e - cons.r < INPUT_BUF_SIZE) {
         cons.buf[cons.e++ % INPUT_BUF_SIZE] = '\b';
@@ -236,12 +265,20 @@ consoleintr(int c)
     }
     break;
 
-  case '\t': // Tab key — commit immediately so shell can call tab_complete().
-    if (cons.e - cons.r < INPUT_BUF_SIZE) {
-      cons.buf[cons.e++ % INPUT_BUF_SIZE] = '\t';
-      cons.w = cons.e;
-      cons.tab_active = 1; // Mark Tab completion active on this line
-      wakeup(&cons.r);
+  case '\t': // Tab key
+    if (cons.raw_pid != 0) {
+      // Raw mode (shell): commit immediately so shell can call tab_complete().
+      if (cons.e - cons.r < INPUT_BUF_SIZE) {
+        cons.buf[cons.e++ % INPUT_BUF_SIZE] = '\t';
+        cons.w = cons.e;
+        wakeup(&cons.r);
+      }
+    } else {
+      // Cooked mode: standard xv6 behavior, echo and buffer without waking reader.
+      if (cons.e - cons.r < INPUT_BUF_SIZE) {
+        consputc('\t');
+        cons.buf[cons.e++ % INPUT_BUF_SIZE] = '\t';
+      }
     }
     break;
 
@@ -250,9 +287,6 @@ consoleintr(int c)
       // Accept only printable ASCII (32–126), carriage return, newline,
       // and Ctrl-D.  This blocks stray control bytes from IME / dead keys.
       if (c == '\r' || c == '\n' || c == C('D') || (c >= 32 && c <= 126)) {
-        if (c == '\r' || c == '\n' || c == C('D')) {
-          cons.tab_active = 0; // Newline or EOF ends the line, clear Tab flag
-        }
         c = (c == '\r') ? '\n' : c;
 
         // echo back to the user.
@@ -278,7 +312,7 @@ void
 consoleinit(void)
 {
   initlock(&cons.lock, "cons");
-  cons.tab_active = 0;
+  cons.raw_pid = 0;
 
   uartinit();
 

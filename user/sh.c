@@ -252,9 +252,6 @@ getcmd(char *buf, int nbuf)
   struct stat st;
   int is_console = (fstat(0, &st) == 0 && st.type == T_DEVICE);
 
-  if (is_console)
-    write(2, "$ ", 2);
-
   memset(buf, 0, nbuf);
 
   if (!is_console) {
@@ -264,6 +261,9 @@ getcmd(char *buf, int nbuf)
     return 0;
   }
 
+  rawmode(1);
+  write(2, "$ ", 2);
+
 #define C(x) ((x) - '@')
 
   int len = 0;
@@ -271,6 +271,7 @@ getcmd(char *buf, int nbuf)
     char c;
     int cc = read(0, &c, 1);
     if (cc < 1) {
+      rawmode(0);
       if (len == 0)
         return -1; // EOF
       break;
@@ -308,6 +309,8 @@ getcmd(char *buf, int nbuf)
       break;
     }
   }
+
+  rawmode(0);
 
   if (len == 0)
     return -1;
