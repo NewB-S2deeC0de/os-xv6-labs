@@ -103,6 +103,8 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+  // Sandbox policy belongs to this process and is copied by fork.
   int syscall_mask;            // System calls this process is not allowed to use
   int syscall_path_mask;       // Masked open/exec calls allowed for syscall_path
   char syscall_path[MAXPATH];  // Path allowed for selected masked calls

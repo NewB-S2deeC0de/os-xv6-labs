@@ -112,6 +112,7 @@ sys_interpose(void)
     return -1;
 
   struct proc *p = myproc();
+  // Add restrictions cumulatively; a later call cannot clear earlier mask bits.
   p->syscall_mask |= mask;
   if (strncmp(path, "-", 2) == 0) {
     // A dash means that no pathname exception is requested for these calls.

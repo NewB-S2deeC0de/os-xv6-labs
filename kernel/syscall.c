@@ -144,6 +144,7 @@ syscall(void)
   num = p->trapframe->a7;
   if (num > 0 && num < NELEM(syscalls) && syscalls[num]) {
     if (p->syscall_mask & (1 << num)) {
+      // Only masked open/exec calls may proceed when their pathname is allowed.
       char path[MAXPATH];
       int path_allowed = 0;
 
