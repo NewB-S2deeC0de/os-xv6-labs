@@ -106,6 +106,7 @@ sys_interpose(void)
   int mask;
 
   argint(0, &mask);
+  // OR restrictions in so a process cannot relax its existing syscall mask.
   myproc()->syscall_mask |= mask;
   return 0;
 }
