@@ -145,7 +145,20 @@ syscall(void)
   if (num > 0 && num < NELEM(syscalls) && syscalls[num]) {
     // Masked calls fail with -1 without terminating the process.
     if (p->syscall_mask & (1 << num)) {
-      p->trapframe->a0 = -1;
+      // Only masked open/exec calls may proceed when their pathname is allowed.
+      char path[MAXPATH];
+      int path_allowed = 0;
+
+      if ((num == SYS_open || num == SYS_exec) &&
+          (p->syscall_path_mask & (1 << num)) &&
+          argstr(0, path, sizeof(path)) >= 0 &&
+          strncmp(path, p->syscall_path, MAXPATH) == 0)
+        path_allowed = 1;
+
+      if (path_allowed)
+        p->trapframe->a0 = syscalls[num]();
+      else
+        p->trapframe->a0 = -1;
     } else {
       // Use num to lookup the system call function for num, call it,
       // and store its return value in p->trapframe->a0
