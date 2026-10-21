@@ -79,6 +79,12 @@ runcmd(struct cmd *cmd)
     if (ecmd->argv[0] == 0)
       exit(1);
     exec(ecmd->argv[0], ecmd->argv);
+    if (ecmd->argv[0][0] != '/' && strlen(ecmd->argv[0]) < 60) {
+      char path[64];
+      path[0] = '/';
+      strcpy(path + 1, ecmd->argv[0]);
+      exec(path, ecmd->argv);
+    }
     fprintf(2, "exec %s failed\n", ecmd->argv[0]);
     break;
 
@@ -167,6 +173,13 @@ tab_complete(char *buf, int *len, int nbuf)
   }
   int is_first_word = (start == i);
 
+  char *search_prefix = prefix;
+  int search_len = prefix_len;
+  if (is_first_word && prefix[0] == '/') {
+    search_prefix = prefix + 1;
+    search_len = prefix_len - 1;
+  }
+
   char *dir = is_first_word ? "/" : ".";
   int fd = open(dir, O_RDONLY);
   if (fd < 0)
@@ -187,7 +200,7 @@ tab_complete(char *buf, int *len, int nbuf)
     if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
       continue;
 
-    if (starts_with(name, prefix, prefix_len)) {
+    if (starts_with(name, search_prefix, search_len)) {
       if (match_count < MAX_MATCHES) {
         int dup = 0;
         for (int k = 0; k < match_count; k++) {
@@ -220,18 +233,33 @@ tab_complete(char *buf, int *len, int nbuf)
   }
 
   if (match_count == 1) {
-    char completion[DIRSIZ + 2];
-    strcpy(completion, matches[0] + prefix_len);
     if (is_first_word) {
+      // Replace typed prefix on screen with "/<matches[0]> "
+      for (int k = 0; k < prefix_len; k++) {
+        write(2, "\b \b", 3);
+      }
+      char completion[DIRSIZ + 4];
+      completion[0] = '/';
+      strcpy(completion + 1, matches[0]);
       int clen = strlen(completion);
       completion[clen] = ' ';
       completion[clen + 1] = '\0';
-    }
-    int compl_len = strlen(completion);
-    if (*len + compl_len < nbuf) {
-      write(2, completion, compl_len);
-      strcpy(buf + *len, completion);
-      *len += compl_len;
+      clen++;
+
+      if (i + clen < nbuf) {
+        write(2, completion, clen);
+        strcpy(buf + i, completion);
+        *len = i + clen;
+      }
+    } else {
+      char completion[DIRSIZ + 2];
+      strcpy(completion, matches[0] + prefix_len);
+      int compl_len = strlen(completion);
+      if (*len + compl_len < nbuf) {
+        write(2, completion, compl_len);
+        strcpy(buf + *len, completion);
+        *len += compl_len;
+      }
     }
   } else {
     // Multiple matches
