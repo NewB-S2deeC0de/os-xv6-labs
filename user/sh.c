@@ -260,9 +260,6 @@ getcmd(char *buf, int nbuf)
   struct stat st;
   int is_console = (fstat(0, &st) == 0 && st.type == T_DEVICE);
 
-  if (is_console)
-    write(2, "$ ", 2);
-
   memset(buf, 0, nbuf);
 
   if (!is_console) {
@@ -271,6 +268,11 @@ getcmd(char *buf, int nbuf)
       return -1;
     return 0;
   }
+
+  rawmode(1);
+  write(2, "$ ", 2);
+
+#define C(x) ((x) - '@')
 
   int len = 0;
   int hist_nav = hist_count; // Navigation starts at the end (current line)
@@ -281,6 +283,7 @@ getcmd(char *buf, int nbuf)
     char c;
     int cc = read(0, &c, 1);
     if (cc < 1) {
+      rawmode(0);
       if (len == 0)
         return -1; // EOF
       break;
@@ -351,6 +354,16 @@ getcmd(char *buf, int nbuf)
       continue;
     }
 
+    if (c == C('U') || c == '\x15') {
+      while (len > 0) {
+        len--;
+        write(2, "\b \b", 3);
+      }
+      buf[0] = '\0';
+      hist_nav = hist_count;
+      temp_buf[0] = '\0';
+      continue;
+    }
     if (c == '\t') {
       tab_complete(buf, &len, nbuf);
       continue;
@@ -365,6 +378,8 @@ getcmd(char *buf, int nbuf)
       break;
     }
   }
+
+  rawmode(0);
 
   if (len == 0)
     return -1;
@@ -400,10 +415,10 @@ main(void)
       cmd[--cmdlen] = '\0';
     }
 
-    // Sanitize cmd: filter only printable ASCII characters (32 to 126)
+    // Sanitize cmd: filter only printable ASCII characters (32 to 126) and Tab ('\t')
     int w = 0;
     for (int r = 0; r < cmdlen; r++) {
-      if (cmd[r] >= 32 && cmd[r] <= 126) {
+      if ((cmd[r] >= 32 && cmd[r] <= 126) || cmd[r] == '\t') {
         cmd[w++] = cmd[r];
       }
     }
@@ -455,9 +470,9 @@ main(void)
     }
 
     // Built-in cd command
-    if (cmd[0] == 'c' && cmd[1] == 'd' && (cmd[2] == ' ' || cmd[2] == '\0')) {
+    if (cmd[0] == 'c' && cmd[1] == 'd' && (cmd[2] == ' ' || cmd[2] == '\t' || cmd[2] == '\0')) {
       char *path = cmd + 2;
-      while (*path == ' ')
+      while (*path == ' ' || *path == '\t')
         path++;
       if (*path == '\0')
         path = "/";

@@ -528,3 +528,11 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_rawmode(void)
+{
+  int enable;
+  argint(0, &enable);
+  return consoleraw(enable);
+}
