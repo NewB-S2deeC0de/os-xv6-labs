@@ -188,14 +188,14 @@ consoleintr(int c)
   static int esc_state = 0;
 
   if (esc_state == 1) {
-    esc_state = (c == '[') ? 2 : 0;
-    if (esc_state == 0) {
-      // Not a CSI sequence; discard the stray ESC + this byte.
+    if (c == '[') {
+      esc_state = 2;
       release(&cons.lock);
       return;
     }
-    release(&cons.lock);
-    return;
+    // Not a CSI sequence; reset state and let 'c' fall through
+    // to normal console processing so the character is not lost.
+    esc_state = 0;
   } else if (esc_state == 2) {
     // Parameter bytes (digits, semicolons) inside an escape sequence.
     if ((c >= '0' && c <= '9') || c == ';') {
