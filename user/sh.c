@@ -4,6 +4,7 @@
 #include "kernel/stat.h"
 #include "user/user.h"
 #include "kernel/fcntl.h"
+#include "kernel/fs.h"
 
 // Parsed command representation
 #define EXEC  1
@@ -78,6 +79,12 @@ runcmd(struct cmd *cmd)
     if (ecmd->argv[0] == 0)
       exit(1);
     exec(ecmd->argv[0], ecmd->argv);
+    if (ecmd->argv[0][0] != '/' && strlen(ecmd->argv[0]) < 60) {
+      char path[64];
+      path[0] = '/';
+      strcpy(path + 1, ecmd->argv[0]);
+      exec(path, ecmd->argv);
+    }
     fprintf(2, "exec %s failed\n", ecmd->argv[0]);
     break;
 
@@ -132,16 +139,208 @@ runcmd(struct cmd *cmd)
   exit(0);
 }
 
+#define MAX_MATCHES 32
+
+static int
+starts_with(const char *s, const char *prefix, int prefix_len)
+{
+  if (strlen(s) < prefix_len)
+    return 0;
+  return memcmp(s, prefix, prefix_len) == 0;
+}
+
+static void
+tab_complete(char *buf, int *len, int nbuf)
+{
+  int i = *len;
+  while (i > 0 && buf[i - 1] != ' ' && buf[i - 1] != '\t') {
+    i--;
+  }
+
+  char prefix[DIRSIZ + 1];
+  int prefix_len = *len - i;
+  if (prefix_len <= 0)
+    return;
+  if (prefix_len > DIRSIZ)
+    prefix_len = DIRSIZ;
+  memmove(prefix, buf + i, prefix_len);
+  prefix[prefix_len] = '\0';
+
+  // Check if this is the first word on the command line
+  int start = 0;
+  while (start < i && (buf[start] == ' ' || buf[start] == '\t')) {
+    start++;
+  }
+  int is_first_word = (start == i);
+
+  char *search_prefix = prefix;
+  int search_len = prefix_len;
+  if (is_first_word && prefix[0] == '/') {
+    search_prefix = prefix + 1;
+    search_len = prefix_len - 1;
+  }
+
+  char *dir = is_first_word ? "/" : ".";
+  int fd = open(dir, O_RDONLY);
+  if (fd < 0)
+    return;
+
+  char matches[MAX_MATCHES][DIRSIZ + 1];
+  int match_count = 0;
+  struct dirent de;
+
+  while (read(fd, &de, sizeof(de)) == sizeof(de)) {
+    if (de.inum == 0)
+      continue;
+
+    char name[DIRSIZ + 1];
+    memmove(name, de.name, DIRSIZ);
+    name[DIRSIZ] = '\0';
+
+    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+      continue;
+
+    if (starts_with(name, search_prefix, search_len)) {
+      if (match_count < MAX_MATCHES) {
+        int dup = 0;
+        for (int k = 0; k < match_count; k++) {
+          if (strcmp(matches[k], name) == 0) {
+            dup = 1;
+            break;
+          }
+        }
+        if (!dup) {
+          strcpy(matches[match_count++], name);
+        }
+      }
+    }
+  }
+  close(fd);
+
+  if (match_count == 0)
+    return;
+
+  // Sort matches alphabetically
+  for (int m = 0; m < match_count - 1; m++) {
+    for (int k = m + 1; k < match_count; k++) {
+      if (strcmp(matches[m], matches[k]) > 0) {
+        char tmp[DIRSIZ + 1];
+        strcpy(tmp, matches[m]);
+        strcpy(matches[m], matches[k]);
+        strcpy(matches[k], tmp);
+      }
+    }
+  }
+
+  if (match_count == 1) {
+    if (is_first_word) {
+      // Replace typed prefix on screen with "/<matches[0]> "
+      for (int k = 0; k < prefix_len; k++) {
+        write(2, "\b \b", 3);
+      }
+      char completion[DIRSIZ + 4];
+      completion[0] = '/';
+      strcpy(completion + 1, matches[0]);
+      int clen = strlen(completion);
+      completion[clen] = ' ';
+      completion[clen + 1] = '\0';
+      clen++;
+
+      if (i + clen < nbuf) {
+        write(2, completion, clen);
+        strcpy(buf + i, completion);
+        *len = i + clen;
+      }
+    } else {
+      char completion[DIRSIZ + 2];
+      strcpy(completion, matches[0] + prefix_len);
+      int compl_len = strlen(completion);
+      if (*len + compl_len < nbuf) {
+        write(2, completion, compl_len);
+        strcpy(buf + *len, completion);
+        *len += compl_len;
+      }
+    }
+  } else {
+    // Multiple matches
+    write(2, "\n", 1);
+    for (int m = 0; m < match_count; m++) {
+      if (m > 0)
+        write(2, " ", 1);
+      write(2, matches[m], strlen(matches[m]));
+    }
+    write(2, "\n$ ", 3);
+    write(2, buf, *len);
+  }
+}
+
 int
 getcmd(char *buf, int nbuf)
 {
   struct stat st;
+  int is_console = (fstat(0, &st) == 0 && st.type == T_DEVICE);
 
-  if (fstat(0, &st) == 0 && st.type == T_DEVICE)
-    write(2, "$ ", 2);
   memset(buf, 0, nbuf);
-  gets(buf, nbuf);
-  if (buf[0] == 0) // EOF
+
+  if (!is_console) {
+    gets(buf, nbuf);
+    if (buf[0] == 0) // EOF
+      return -1;
+    return 0;
+  }
+
+  rawmode(1);
+  write(2, "$ ", 2);
+
+#define C(x) ((x) - '@')
+
+  int len = 0;
+  while (len + 1 < nbuf) {
+    char c;
+    int cc = read(0, &c, 1);
+    if (cc < 1) {
+      rawmode(0);
+      if (len == 0)
+        return -1; // EOF
+      break;
+    }
+
+    if (c == '\b') {
+      if (len > 0) {
+        len--;
+        buf[len] = '\0';
+        write(2, "\b \b", 3);
+      }
+      continue;
+    }
+
+    if (c == C('U') || c == '\x15') {
+      while (len > 0) {
+        len--;
+        write(2, "\b \b", 3);
+      }
+      buf[0] = '\0';
+      continue;
+    }
+
+    if (c == '\t') {
+      tab_complete(buf, &len, nbuf);
+      continue;
+    }
+
+    if (c >= 32 && c <= 126) {
+      buf[len++] = c;
+      buf[len] = '\0';
+    } else if (c == '\n' || c == '\r') {
+      buf[len++] = '\n';
+      buf[len] = '\0';
+      break;
+    }
+  }
+
+  rawmode(0);
+
+  if (len == 0)
     return -1;
   return 0;
 }
