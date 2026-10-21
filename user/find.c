@@ -6,12 +6,11 @@
 #include "user/user.h"
 
 struct entry {
-  char name[DIRSIZ + 1];
+  char path[MAXPATH];
   struct entry *next;
 };
 
-// Keep the command argument array out of each recursive stack frame.
-static int __attribute__((noinline))
+static int
 on_match(char *path, char **command, int command_argc)
 {
   if (command_argc == 0) {
@@ -46,12 +45,15 @@ on_match(char *path, char **command, int command_argc)
   return status != 0;
 }
 
-// Read and close the directory before traversal. The caller owns the list.
-static struct entry * __attribute__((noinline))
-read_entries(int fd, char *path, int *failed)
+// Prepend children in directory order so the work list retains DFS order.
+// Every queued entry owns its path; no directory stays open between jobs.
+static struct entry *
+read_entries(int fd, char *path, struct entry *pending, int *failed)
 {
   struct dirent de;
   struct entry *head = 0, **tail = &head;
+  int len = strlen(path);
+  int separator = len > 0 && path[len - 1] != '/';
   int n;
 
   while ((n = read(fd, &de, sizeof(de))) == sizeof(de)) {
@@ -62,6 +64,11 @@ read_entries(int fd, char *path, int *failed)
     name[DIRSIZ] = '\0';
     if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
       continue;
+    if (len + separator + strlen(name) + 1 > MAXPATH) {
+      fprintf(2, "find: path too long: %s/%s\n", path, name);
+      *failed = 1;
+      continue;
+    }
 
     struct entry *item = malloc(sizeof(*item));
     if (item == 0) {
@@ -69,7 +76,10 @@ read_entries(int fd, char *path, int *failed)
       *failed = 1;
       break;
     }
-    strcpy(item->name, name);
+    strcpy(item->path, path);
+    if (separator)
+      item->path[len] = '/';
+    strcpy(item->path + len + separator, name);
     item->next = 0;
     *tail = item;
     tail = &item->next;
@@ -79,59 +89,57 @@ read_entries(int fd, char *path, int *failed)
     *failed = 1;
   }
   close(fd);
+  *tail = pending;
   return head;
 }
 
 static int
 find(char *path, char *target, char **command, int command_argc)
 {
-  int fd, failed = 0;
-  struct stat st;
-  char *name = path;
-
-  if ((fd = open(path, O_RDONLY)) < 0) {
-    fprintf(2, "find: cannot open %s\n", path);
+  int failed = 0;
+  struct entry *pending = malloc(sizeof(*pending));
+  if (pending == 0) {
+    fprintf(2, "find: out of memory\n");
     return 1;
   }
-  if (fstat(fd, &st) < 0) {
-    fprintf(2, "find: cannot stat %s\n", path);
-    close(fd);
-    return 1;
-  }
+  strcpy(pending->path, path);
+  pending->next = 0;
 
-  for (char *p = path; *p; p++) {
-    if (*p == '/')
-      name = p + 1;
-  }
-  struct entry *head = 0;
-  if (st.type == T_DIR)
-    head = read_entries(fd, path, &failed);
-  else
-    close(fd);
-
-  // Report directories too, before visiting their children.
-  if (strcmp(name, target) == 0 && on_match(path, command, command_argc))
-    failed = 1;
-
-  int len = strlen(path);
-  int separator = len > 0 && path[len - 1] != '/';
-  while (head != 0) {
-    struct entry *item = head;
-    head = item->next;
-    if (len + separator + strlen(item->name) + 1 > MAXPATH) {
-      fprintf(2, "find: path too long: %s/%s\n", path, item->name);
+  while (pending != 0) {
+    struct entry *item = pending;
+    pending = item->next;
+    path = item->path;
+    struct stat st;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+      fprintf(2, "find: cannot open %s\n", path);
       failed = 1;
       free(item);
       continue;
     }
-    // Reuse main's path buffer to keep recursive stack frames small.
-    if (separator)
-      path[len] = '/';
-    strcpy(path + len + separator, item->name);
-    free(item);
-    if (find(path, target, command, command_argc))
+    if (fstat(fd, &st) < 0) {
+      fprintf(2, "find: cannot stat %s\n", path);
+      close(fd);
       failed = 1;
-    path[len] = '\0';
+      free(item);
+      continue;
+    }
+
+    if (st.type == T_DIR)
+      pending = read_entries(fd, path, pending, &failed);
+    else
+      close(fd);
+
+    char *name = path;
+    for (char *p = path; *p; p++) {
+      if (*p == '/')
+        name = p + 1;
+    }
+    // Process a matching directory before its queued children. Keep its path
+    // alive until on_match has waited for the command to finish.
+    if (strcmp(name, target) == 0 && on_match(path, command, command_argc))
+      failed = 1;
+    free(item);
   }
   return failed;
 }
