@@ -100,6 +100,7 @@ sys_kill(void)
 }
 
 // Add syscall restrictions and an optional pathname exception for open/exec.
+// Restrictions are monotone: a sandboxed process cannot widen its own permissions.
 uint64
 sys_interpose(void)
 {
@@ -112,14 +113,35 @@ sys_interpose(void)
     return -1;
 
   struct proc *p = myproc();
-  // Add restrictions cumulatively; a later call cannot clear earlier mask bits.
+
+  // Rule 1: Once SYS_interpose itself is blocked, the process cannot call it
+  // again to widen any permission.  Enforce monotonic restriction:
+  // a process that is already sandboxed on interpose must not be able to
+  // modify its own sandbox through this syscall.
+  if (p->syscall_mask & (1 << SYS_interpose))
+    return -1;
+
+  // Rule 2: Mask bits may only be set, never cleared.
   p->syscall_mask |= mask;
+
+  // Rule 3: Path restrictions may only be narrowed, never widened.
+  // If a path filter is already set for a call, the new call cannot replace it
+  // with a different (potentially broader) path.
   if (strncmp(path, "-", 2) == 0) {
-    // A dash means that no pathname exception is requested for these calls.
-    p->syscall_path_mask &= ~(mask & path_calls);
-  } else if (mask & path_calls) {
-    safestrcpy(p->syscall_path, path, sizeof(p->syscall_path));
+    // "-" means no pathname exception: add to path_mask (blocking all paths).
+    // We must not clear bits already in path_mask — that would re-allow a path.
     p->syscall_path_mask |= mask & path_calls;
+  } else if (mask & path_calls) {
+    // A specific path exception is requested.
+    // Only allow setting the path if no path has been set yet for these calls;
+    // a sandboxed process cannot replace an existing path restriction with a new one.
+    int affected = mask & path_calls & ~p->syscall_path_mask;
+    if (affected) {
+      // First time setting a path filter for these calls: record the path.
+      safestrcpy(p->syscall_path, path, sizeof(p->syscall_path));
+      p->syscall_path_mask |= affected;
+    }
+    // Calls already in path_mask keep their original path — no change.
   }
   return 0;
 }
