@@ -185,6 +185,8 @@ mkfs/mkfs: mkfs/mkfs.c $K/fs.h $K/param.h
 UPROGS=\
 	$U/_cat\
 	$U/_echo\
+	$U/_exploit\
+	$U/_exploit2\
 	$U/_forktest\
 	$U/_grep\
 	$U/_init\

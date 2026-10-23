@@ -29,7 +29,7 @@ kexec(char *path, char **argv)
 {
   char *s, *last;
   int i, off;
-  uint64 argc, sz = 0, sp, ustack[MAXARG], stackbase;
+  uint64 argc, sz = 0, sp, ustack[MAXARG + 1], stackbase;
   struct elfhdr elf;
   struct inode *ip;
   struct proghdr ph;
@@ -99,6 +99,8 @@ kexec(char *path, char **argv)
   // Copy argument strings into new stack, remember their
   // addresses in ustack[].
   for (argc = 0; argv[argc]; argc++) {
+    if (argc >= MAXARG)
+      goto bad;
     sp -= strlen(argv[argc]) + 1;
     sp -= sp % 16; // riscv sp must be 16-byte aligned
     if (sp < stackbase)
