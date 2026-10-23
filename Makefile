@@ -214,7 +214,8 @@ UPROGS += \
 	$U/_attack\
 	$U/_secret\
 	$U/_sandbox\
-	$U/_sbtest
+	$U/_sbtest\
+	$U/_escape2
 endif
 
 ifeq ($(LAB),traps)
