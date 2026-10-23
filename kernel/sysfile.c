@@ -458,7 +458,7 @@ sys_chdir(void)
 uint64
 sys_exec(void)
 {
-  char path[MAXPATH], *argv[MAXARG];
+  char path[MAXPATH], *argv[MAXARG + 1];
   int i;
   uint64 uargv, uarg;
 
