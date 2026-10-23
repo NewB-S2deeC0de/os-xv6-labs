@@ -234,24 +234,20 @@ tab_complete(char *buf, int *len, int nbuf)
 
   if (match_count == 1) {
     if (is_first_word) {
-      // Replace typed prefix on screen with "/<matches[0]> "
-      for (int k = 0; k < prefix_len; k++) {
-        write(2, "\b \b", 3);
-      }
-      char completion[DIRSIZ + 4];
-      completion[0] = '/';
-      strcpy(completion + 1, matches[0]);
+      // Chỉ in phần còn thiếu + dấu cách; runcmd() đã có fallback tìm ở "/"
+      char completion[DIRSIZ + 2];
+      strcpy(completion, matches[0] + search_len);
       int clen = strlen(completion);
       completion[clen] = ' ';
       completion[clen + 1] = '\0';
       clen++;
-
-      if (i + clen < nbuf) {
+      if (*len + clen < nbuf) {
         write(2, completion, clen);
-        strcpy(buf + i, completion);
-        *len = i + clen;
-      }
-    } else {
+        strcpy(buf + *len, completion);
+        *len += clen;
+      } 
+    }
+       else {
       char completion[DIRSIZ + 2];
       strcpy(completion, matches[0] + prefix_len);
       int compl_len = strlen(completion);
