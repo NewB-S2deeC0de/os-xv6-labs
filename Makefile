@@ -186,6 +186,7 @@ UPROGS=\
 	$U/_cat\
 	$U/_echo\
 	$U/_exploit\
+	$U/_exploit2\
 	$U/_forktest\
 	$U/_grep\
 	$U/_init\
