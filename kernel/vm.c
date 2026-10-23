@@ -342,9 +342,31 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   int szinc = PGSIZE;
 
   for (i = 0; i < sz; i += szinc) {
-    if ((pte = walk(old, i, 0)) == 0)
+    if ((pte = walk(old, i, 0)) == 0) {
+      // No page table entry: lazy page not yet touched by parent.
+      // Allocate a fresh zero page for the child so it gets the same
+      // zero-initialized view as the parent would on first access.
+      mem = kalloc();
+      if (mem == 0)
+        goto err;
+      memset(mem, 0, PGSIZE);
+      if (mappages(new, i, PGSIZE, (uint64)mem, PTE_W | PTE_U | PTE_R) != 0) {
+        kfree(mem);
+        goto err;
+      }
       continue;
+    }
     if ((*pte & PTE_V) == 0) {
+      // Page table entry exists but page not yet allocated (lazy).
+      // Same fix: give child a zero page so fork semantics are preserved.
+      mem = kalloc();
+      if (mem == 0)
+        goto err;
+      memset(mem, 0, PGSIZE);
+      if (mappages(new, i, PGSIZE, (uint64)mem, PTE_W | PTE_U | PTE_R) != 0) {
+        kfree(mem);
+        goto err;
+      }
       continue;
     }
     szinc = PGSIZE;
