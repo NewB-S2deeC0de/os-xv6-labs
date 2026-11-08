@@ -16,6 +16,10 @@
 #include "file.h"
 #include "fcntl.h"
 
+// Maximum number of symbolic links open() follows before it
+// assumes a cycle and fails.
+#define MAXSYMLINK 10
+
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
 static int
@@ -328,7 +332,38 @@ sys_open(void)
       return -1;
     }
     ilock(ip);
-    if(ip->type == T_DIR && omode != O_RDONLY){
+
+    // Follow a chain of symbolic links unless O_NOFOLLOW asks
+    // for the link itself.
+    if(!(omode & O_NOFOLLOW)){
+      int depth = 0;
+      while(ip->type == T_SYMLINK){
+        // Give up on cycles and over-long chains, and on a
+        // link whose stored target cannot be read.
+        if(++depth > MAXSYMLINK ||
+           (n = readi(ip, 0, (uint64)path, 0, MAXPATH - 1)) <= 0){
+          iunlockput(ip);
+          end_op();
+          return -1;
+        }
+        path[n] = '\0';
+        // Release the link before looking up its target: namei()
+        // locks each directory on the way. Holding the link's lock
+        // meanwhile would invert the parent-before-child order used
+        // by create()/unlink() and could deadlock, or self-deadlock
+        // if the target path passes through this very link.
+        iunlockput(ip);
+        if((ip = namei(path)) == 0){
+          end_op();
+          return -1;
+        }
+        ilock(ip);
+      }
+    }
+
+    // O_NOFOLLOW only affects symlinks; ignore it here so a
+    // directory can still be opened read-only with it.
+    if(ip->type == T_DIR && (omode & ~O_NOFOLLOW) != O_RDONLY){
       iunlockput(ip);
       end_op();
       return -1;
@@ -502,4 +537,61 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+// Create a symbolic link at path that refers to target.
+// The target string is stored as the link inode's data;
+// target need not exist.
+uint64
+sys_symlink(void)
+{
+  char target[MAXPATH], path[MAXPATH], name[DIRSIZ];
+  struct inode *dp, *ip;
+  int n;
+
+  if((n = argstr(0, target, MAXPATH)) <= 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+
+  begin_op();
+
+  if((dp = nameiparent(path, name)) == 0){
+    end_op();
+    return -1;
+  }
+  ilock(dp);
+
+  // Fail if path already exists, as link() does.
+  if((ip = dirlookup(dp, name, 0)) != 0){
+    iput(ip);
+    goto bad_dp;
+  }
+
+  if((ip = ialloc(dp->dev, T_SYMLINK)) == 0)
+    goto bad_dp;
+  ilock(ip);
+  ip->major = 0;
+  ip->minor = 0;
+  ip->nlink = 1;
+  iupdate(ip);
+
+  // Store the target before linking the inode into the directory,
+  // so a failure never leaves a visible link with a bad target.
+  if(writei(ip, 0, (uint64)target, 0, n) != n || dirlink(dp, name, ip->inum) < 0){
+    // Not reachable from any directory: nlink = 0 makes the
+    // final iput() free the inode and its data blocks.
+    ip->nlink = 0;
+    iupdate(ip);
+    iunlockput(ip);
+    goto bad_dp;
+  }
+
+  iunlockput(ip);
+  iunlockput(dp);
+  end_op();
+  return 0;
+
+bad_dp:
+  iunlockput(dp);
+  end_op();
+  return -1;
 }
