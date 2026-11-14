@@ -1,0 +1,13 @@
+1. Loi giai su dung bao nhieu PTE superpage?
+Tra loi: 95 PTE superpage.
+Giai thich:
+- Vung PLIC (kich thuoc 64 MiB = 0x4000000, bat dau tai 0x0c000000): do da can chinh 2 MiB, duoc anh xa bang 32 superpages (64 MiB / 2 MiB = 32).
+- Vung RAM (tu etext den PHYSTOP 0x88000000): phan le tu etext den moc 2 MiB dau tien (0x80200000) duoc anh xa bang cac trang 4 KiB thuong; toan bo 126 MiB con lai (tu 0x80200000 den 0x88000000) da can chinh 2 MiB, duoc anh xa bang 63 superpages (126 MiB / 2 MiB = 63).
+Tong cong: 32 + 63 = 95 PTE superpage.
+
+2. Nhung PTE superpage nay tiet kiem duoc bao nhieu trang o cap cuoi?
+Tra loi: Tiet kiem duoc 95 trang bang trang o cap cuoi (cap 0), tuong duong 95 * 4096 = 389.120 bytes (~380 KiB) bo nho vat ly.
+Giai thich:
+- Trong cau truc phan trang Sv39, moi bang trang cap 0 gom 512 PTE va chiem dung 1 trang vat ly (4096 bytes) de quan ly 512 * 4 KiB = 2 MiB.
+- Khi su dung 1 PTE leaf o cap 1 (superpage), phan cung MMU dich dia chi truc tiep tu PTE cap 1 ma khong can thiet lap hay cap phat bang trang cap 0.
+- Do do, voi 95 superpages duoc tao ra, kernel khong can phan bo 95 trang vat ly lam bang trang cap 0, dong thoi giup giam thieu so lan TLB cache miss dang ke khi truy cap bo nho kernel.
