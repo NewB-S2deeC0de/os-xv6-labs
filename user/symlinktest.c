@@ -181,6 +181,38 @@ testsymlink(void)
   close(fd1);
   fd1 = -1;
 
+  // open(O_CREATE) must follow an existing symlink
+  unlink("/testsymlink/a");
+  unlink("/testsymlink/b");
+  unlink("/testsymlink/c");
+  fd1 = open("/testsymlink/b", O_CREATE | O_RDWR);
+  if(fd1 < 0)
+    fail("could not create /testsymlink/b");
+  if(write(fd1, &c, 1) != 1)
+    fail("write /testsymlink/b failed");
+  close(fd1);
+  fd1 = -1;
+  if(symlink("/testsymlink/b", "/testsymlink/a") != 0)
+    fail("symlink a -> b failed");
+  fd1 = open("/testsymlink/a", O_CREATE | O_RDWR);
+  if(fd1 < 0)
+    fail("open(O_CREATE) did not follow existing symlink");
+  close(fd1);
+  fd1 = -1;
+
+  // open(O_CREATE) through a dangling symlink creates the target
+  if(symlink("/testsymlink/c", "/testsymlink/z") != 0)
+    fail("symlink z -> c failed");
+  fd1 = open("/testsymlink/z", O_CREATE | O_RDWR);
+  if(fd1 < 0)
+    fail("open(O_CREATE) on dangling symlink failed");
+  close(fd1);
+  fd1 = open("/testsymlink/c", O_RDONLY);
+  if(fd1 < 0)
+    fail("dangling symlink target was not created");
+  close(fd1);
+  fd1 = -1;
+
   printf("test symlinks: ok\n");
 done:
   close(fd1);

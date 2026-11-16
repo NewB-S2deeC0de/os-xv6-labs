@@ -320,54 +320,64 @@ sys_open(void)
 
   begin_op();
 
-  if(omode & O_CREATE){
-    ip = create(path, T_FILE, 0, 0);
-    if(ip == 0){
-      end_op();
-      return -1;
+  if(omode & O_NOFOLLOW){
+    if(omode & O_CREATE){
+      ip = create(path, T_FILE, 0, 0);
+      if(ip == 0){
+        end_op();
+        return -1;
+      }
+    } else {
+      if((ip = namei(path)) == 0){
+        end_op();
+        return -1;
+      }
+      ilock(ip);
     }
   } else {
-    if((ip = namei(path)) == 0){
-      end_op();
-      return -1;
-    }
-    ilock(ip);
+    int depth = 0;
+    while(1){
+      if((ip = namei(path)) == 0){
+        if(omode & O_CREATE){
+          ip = create(path, T_FILE, 0, 0);
+          if(ip == 0){
+            end_op();
+            return -1;
+          }
+        } else {
+          end_op();
+          return -1;
+        }
+        break;
+      }
 
-    // Follow a chain of symbolic links unless O_NOFOLLOW asks
-    // for the link itself.
-    if(!(omode & O_NOFOLLOW)){
-      int depth = 0;
-      while(ip->type == T_SYMLINK){
-        // Give up on cycles and over-long chains, and on a
-        // link whose stored target cannot be read.
-        if(++depth > MAXSYMLINK ||
-           (n = readi(ip, 0, (uint64)path, 0, MAXPATH - 1)) <= 0){
+      ilock(ip);
+      if(ip->type != T_SYMLINK){
+        if((omode & O_CREATE) && ip->type != T_FILE && ip->type != T_DEVICE){
           iunlockput(ip);
           end_op();
           return -1;
         }
-        path[n] = '\0';
-        // Release the link before looking up its target: namei()
-        // locks each directory on the way. Holding the link's lock
-        // meanwhile would invert the parent-before-child order used
-        // by create()/unlink() and could deadlock, or self-deadlock
-        // if the target path passes through this very link.
-        iunlockput(ip);
-        if((ip = namei(path)) == 0){
-          end_op();
-          return -1;
-        }
-        ilock(ip);
+        break;
       }
-    }
 
-    // O_NOFOLLOW only affects symlinks; ignore it here so a
-    // directory can still be opened read-only with it.
-    if(ip->type == T_DIR && (omode & ~O_NOFOLLOW) != O_RDONLY){
+      if(++depth > MAXSYMLINK ||
+         (n = readi(ip, 0, (uint64)path, 0, MAXPATH - 1)) <= 0){
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+      path[n] = '\0';
       iunlockput(ip);
-      end_op();
-      return -1;
     }
+  }
+
+  // O_NOFOLLOW only affects symlinks; ignore it here so a
+  // directory can still be opened read-only with it.
+  if(ip->type == T_DIR && (omode & ~O_NOFOLLOW) != O_RDONLY){
+    iunlockput(ip);
+    end_op();
+    return -1;
   }
 
   if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
