@@ -132,20 +132,28 @@ sys_pgaccess(void)
   char mask[PGACCESS_MAXPAGES / 8];
   memset(mask, 0, sizeof(mask));
 
+  // pass 1: validate the whole range and build the mask without
+  // modifying any PTE, so a failure leaves no partial state behind
   for (int i = 0; i < npages; i++) {
     pte_t *pte = walk(p->pagetable, start + (uint64)i * PGSIZE, 0);
     if (pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0)
       return -1;  // unmapped or not a user page
-    if (*pte & PTE_A) {
+    if (*pte & PTE_A)
       mask[i / 8] |= 1 << (i % 8);
-      *pte &= ~PTE_A;  // clear so the next call reports only new accesses
-    }
+  }
+
+  if (copyout(p->pagetable, p->sz, ubuf, mask, (npages + 7) / 8) < 0)
+    return -1;
+
+  // pass 2: only after success, clear PTE_A so the next call reports
+  // only new accesses
+  for (int i = 0; i < npages; i++) {
+    pte_t *pte = walk(p->pagetable, start + (uint64)i * PGSIZE, 0);
+    *pte &= ~PTE_A;
   }
   // stale TLB entries could still have A set and hide future accesses
   sfence_vma();
 
-  if (copyout(p->pagetable, p->sz, ubuf, mask, (npages + 7) / 8) < 0)
-    return -1;
   return 0;
 }
 #endif
