@@ -142,6 +142,20 @@ pgaccess_test()
   if (pgaccess(buf, 4096, end) >= 0)
     err("pgaccess succeeded");
 
+  // a call that fails midway must not clear access bits of earlier pages
+  char *last = (char *)(((uint64) sbrk(0) - 1) & ~(uint64)(PGSIZE - 1));
+  bits[0] = 0;
+  if (pgaccess(last, 1, bits) < 0)
+    err("pgaccess failed");
+  last[0] += 1;
+  if (pgaccess(last, 2, bits) >= 0)
+    err("pgaccess succeeded");
+  bits[0] = 0;
+  if (pgaccess(last, 1, bits) < 0)
+    err("pgaccess failed");
+  if ((bits[0] & 1) == 0)
+    err("failed pgaccess cleared access bit");
+
   // test accessing first text page
   if (pgaccess((char *) 4096, 1, bits) < 0)
     err("pgaccess failed");
